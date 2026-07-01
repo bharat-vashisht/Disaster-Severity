@@ -1,0 +1,20 @@
+Overall Test Accuracy: 97.10%
+
+Classification Report:
+              precision    recall  f1-score   support
+
+  Earthquake     0.9776    0.9121    0.9437       239
+        Fire     0.9908    0.9862    0.9885       436
+       Flood     0.9743    0.9801    0.9772       502
+      Normal     0.9472    0.9769    0.9618       477
+
+    accuracy                         0.9710      1654
+   macro avg     0.9724    0.9638    0.9678      1654
+weighted avg     0.9713    0.9710    0.9709      1654
+
+
+Confusion Matrix (rows=true, cols=predicted):
+[[218   1   7  13]
+ [  0 430   0   6]
+ [  1   2 492   7]
+ [  4   1   6 466]]

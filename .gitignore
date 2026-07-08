@@ -1,0 +1,56 @@
+# ── Virtual environment ──────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Python cache ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# ── Jupyter ───────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Dataset (too large for GitHub) ───────────────────────────────────
+data/
+*.zip
+*.tar.gz
+
+# ── Results / generated images ───────────────────────────────────────
+results/gradcam/
+results/*.png
+
+# ── OS files ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# ── VS Code ───────────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+
+# ── Environment variables (NEVER commit secrets) ──────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Temporary files ───────────────────────────────────────────────────
+*.tmp
+*.temp
+tmp/
+temp/
+
+# ── PyRight / Pylance ─────────────────────────────────────────────────
+pyrightconfig.json

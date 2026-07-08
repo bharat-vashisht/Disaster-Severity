@@ -1,13 +1,14 @@
 """
-explain.py
-Generates Grad-CAM heatmaps for the trained disaster severity model.
-This is the "explainable AI" part of the project: it shows WHICH regions
-of a satellite/aerial image the model focused on to make its prediction.
+explain.py  (upgraded)
+Generates dual explainability visualizations:
+  - Grad-CAM  (original)
+  - Grad-CAM++ (improved gradient aggregation, better for multiple instances)
+
+Side-by-side output: Original | Grad-CAM | Grad-CAM++
+Saves to results/gradcam/
 
 Run from project root:
     python src/explain.py
-
-Output: saves heatmap overlay images to results/gradcam/
 """
 
 import os
@@ -17,143 +18,137 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision import transforms
 
-from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam import GradCAM, GradCAMPlusPlus
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
 from model import get_model
+from severity import compute_severity_score
 
 # ---- Config ----
-MODEL_PATH = "models/best_model.pth"
-TEST_DIR = "data/Test"
-OUTPUT_DIR = "results/gradcam"
-NUM_IMAGES_PER_CLASS = 3   # how many example images to explain per class
-IMG_SIZE = 224
-
+MODEL_PATH    = "models/best_model.pth"
+TEST_DIR      = "data/Test"
+OUTPUT_DIR    = "results/gradcam"
+NUM_PER_CLASS = 3
+IMG_SIZE      = 224
 MEAN = [0.485, 0.456, 0.406]
-STD = [0.229, 0.224, 0.225]
+STD  = [0.229, 0.224, 0.225]
 
 
-def load_model_and_classes(device):
-    """Loads the trained model + class names from the saved checkpoint."""
-    checkpoint = torch.load(MODEL_PATH, map_location=device)
+def load_model(device):
+    checkpoint  = torch.load(MODEL_PATH, map_location=device)
     class_names = checkpoint["class_names"]
-
-    model = get_model(num_classes=len(class_names), freeze_backbone=True)
+    model       = get_model(num_classes=len(class_names), freeze_backbone=True)
     model.load_state_dict(checkpoint["model_state_dict"])
-    model.to(device)
-    model.eval()
-
-    print(f"Loaded model (trained to epoch {checkpoint['epoch']}, "
-          f"val_acc={checkpoint['val_acc']:.4f})")
-    print(f"Classes: {class_names}")
-
+    model.to(device).eval()
+    print(f"Loaded model — epoch {checkpoint['epoch']}, val_acc={checkpoint['val_acc']:.4f}")
+    print(f"Classes: {class_names}\n")
     return model, class_names
 
 
-def preprocess_image(image_path):
-    """
-    Loads an image and returns:
-      - input_tensor: normalized tensor ready for the model, shape [1, 3, 224, 224]
-      - rgb_image: float32 numpy array in [0,1] range, shape [224, 224, 3]
-                    (used as the background for the heatmap overlay)
-    """
-    img = Image.open(image_path).convert("RGB")
-    img_resized = img.resize((IMG_SIZE, IMG_SIZE))
-
-    rgb_image = np.array(img_resized).astype(np.float32) / 255.0
-
-    transform = transforms.Compose([
+def preprocess(image_path):
+    img      = Image.open(image_path).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
+    rgb      = np.array(img).astype(np.float32) / 255.0
+    tensor   = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=MEAN, std=STD),
-    ])
-    input_tensor = transform(img_resized).unsqueeze(0)  # add batch dimension
-
-    return input_tensor, rgb_image
+        transforms.Normalize(MEAN, STD),
+    ])(img).unsqueeze(0)
+    return tensor, rgb
 
 
-def generate_gradcam_for_image(model, cam, input_tensor, rgb_image, true_label_idx=None):
-    """
-    Runs Grad-CAM on a single image.
-    Returns: visualization (heatmap overlay), predicted_class_idx, confidence
-    """
-    # Get model prediction first
-    with torch.no_grad():
-        output = model(input_tensor)
-        probs = torch.softmax(output, dim=1)
-        confidence, predicted_idx = torch.max(probs, dim=1)
-        predicted_idx = predicted_idx.item()
-        confidence = confidence.item()
+def run_cam(cam_obj, input_tensor, pred_idx):
+    targets      = [ClassifierOutputTarget(pred_idx)]
+    grayscale    = cam_obj(input_tensor=input_tensor, targets=targets)[0]
+    return grayscale
 
-    # Generate Grad-CAM for the PREDICTED class (explains "why the model said this")
-    targets = [ClassifierOutputTarget(predicted_idx)]
-    grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
-    grayscale_cam = grayscale_cam[0, :]  # first (only) image in batch
 
-    visualization = show_cam_on_image(rgb_image, grayscale_cam, use_rgb=True)
+def save_comparison(rgb, cam1, cam2, title, save_path, sev_result):
+    """Saves a 3-panel figure: Original | Grad-CAM | Grad-CAM++."""
+    vis1 = show_cam_on_image(rgb, cam1, use_rgb=True)
+    vis2 = show_cam_on_image(rgb, cam2, use_rgb=True)
 
-    return visualization, predicted_idx, confidence
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4.5))
+    fig.patch.set_facecolor("#0f1117")
+
+    for ax in axes:
+        ax.axis("off")
+        ax.set_facecolor("#0f1117")
+
+    axes[0].imshow(rgb)
+    axes[0].set_title("Original Image", color="white", fontsize=11, pad=8)
+
+    axes[1].imshow(vis1)
+    axes[1].set_title("Grad-CAM", color="#f39c12", fontsize=11, pad=8)
+
+    axes[2].imshow(vis2)
+    axes[2].set_title("Grad-CAM++", color="#3498db", fontsize=11, pad=8)
+
+    tier_color = sev_result["color"]
+    fig.suptitle(
+        f"{title}  |  Severity Score: {sev_result['score']}/100  "
+        f"({sev_result['tier']})  |  Confidence: {sev_result['confidence']}%",
+        color=tier_color, fontsize=12, fontweight="bold", y=1.01
+    )
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight",
+                facecolor="#0f1117")
+    plt.close(fig)
 
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
+    print(f"Device: {device}")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    model, class_names = load_model_and_classes(device)
-
-    # Target the last conv block of ResNet18 — standard choice for Grad-CAM
+    model, class_names = load_model(device)
     target_layers = [model.layer4[-1]]
 
-    with GradCAM(model=model, target_layers=target_layers) as cam:
+    with GradCAM(model=model, target_layers=target_layers) as cam, \
+         GradCAMPlusPlus(model=model, target_layers=target_layers) as cam_pp:
+
         for class_name in class_names:
             class_dir = os.path.join(TEST_DIR, class_name)
             if not os.path.isdir(class_dir):
-                print(f"  Skipping missing folder: {class_dir}")
                 continue
 
-            image_files = [f for f in os.listdir(class_dir)
-                            if f.lower().endswith((".jpg", ".jpeg", ".png"))]
-            image_files = image_files[:NUM_IMAGES_PER_CLASS]
+            images = [f for f in os.listdir(class_dir)
+                      if f.lower().endswith((".jpg", ".jpeg", ".png"))][:NUM_PER_CLASS]
 
-            print(f"\nProcessing class '{class_name}' ({len(image_files)} images)...")
+            print(f"Class '{class_name}' — {len(images)} images")
 
-            for img_file in image_files:
-                img_path = os.path.join(class_dir, img_file)
-                input_tensor, rgb_image = preprocess_image(img_path)
-                input_tensor = input_tensor.to(device)
+            for img_file in images:
+                path = os.path.join(class_dir, img_file)
+                tensor, rgb = preprocess(path)
+                tensor = tensor.to(device)
 
-                visualization, pred_idx, confidence = generate_gradcam_for_image(
-                    model, cam, input_tensor, rgb_image
-                )
+                # Predict
+                with torch.no_grad():
+                    out   = model(tensor)
+                    probs = torch.softmax(out, dim=1)[0]
+                    conf, pred_idx = torch.max(probs, 0)
+                    pred_idx = pred_idx.item()
+                    conf     = conf.item()
 
-                predicted_class = class_names[pred_idx]
-                correct = "CORRECT" if predicted_class == class_name else "WRONG"
+                predicted = class_names[pred_idx]
+                correct   = "✓" if predicted == class_name else "✗"
 
-                # ---- Save side-by-side: original | heatmap overlay ----
-                fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-                axes[0].imshow(rgb_image)
-                axes[0].set_title(f"Original\nTrue: {class_name}")
-                axes[0].axis("off")
+                # Both CAMs
+                g1 = run_cam(cam,    tensor, pred_idx)
+                g2 = run_cam(cam_pp, tensor, pred_idx)
 
-                axes[1].imshow(visualization)
-                axes[1].set_title(f"Grad-CAM\nPred: {predicted_class} "
-                                   f"({confidence*100:.1f}%) [{correct}]")
-                axes[1].axis("off")
+                # Severity
+                sev = compute_severity_score(predicted, conf)
 
-                plt.tight_layout()
+                title     = f"True: {class_name} | Pred: {predicted} {correct}"
+                out_name  = f"{class_name}_{img_file.split('.')[0]}_comparison.png"
+                out_path  = os.path.join(OUTPUT_DIR, out_name)
+                save_comparison(rgb, g1, g2, title, out_path, sev)
 
-                out_name = f"{class_name}_{img_file.split('.')[0]}_gradcam.png"
-                out_path = os.path.join(OUTPUT_DIR, out_name)
-                plt.savefig(out_path, dpi=150, bbox_inches="tight")
-                plt.close(fig)
+                print(f"  {img_file} -> {predicted} ({conf*100:.1f}%) "
+                      f"[{correct}] score={sev['score']} {sev['tier']}")
 
-                print(f"  {img_file} -> predicted: {predicted_class} "
-                      f"({confidence*100:.1f}%) [{correct}] -> saved {out_name}")
-
-    print(f"\nAll Grad-CAM visualizations saved to: {OUTPUT_DIR}/")
-    print("Use these images directly in your presentation slides.")
+    print(f"\nAll visualizations saved to {OUTPUT_DIR}/")
 
 
 if __name__ == "__main__":
